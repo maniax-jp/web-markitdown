@@ -31,9 +31,9 @@ class PyodideEnv {
             await micropip.install('markitdown');
 
             this.isInitialized = true;
-            console.log('[Worker] Pyodide environment initialized and markitdown installed.');
+            console.log('[Worker] Pyodide環境の初期化およびmarkitdownのインストールが完了しました。');
         } catch (error) {
-            console.error('[Worker] Failed to initialize Pyodide environment:', error);
+            console.error('[Worker] Pyodide環境の初期化に失敗しました:', error);
             throw error;
         }
     }
@@ -97,7 +97,7 @@ result.markdown
             const markdown = pyodide.runPython(pythonCode);
             return markdown;
         } catch (error) {
-            console.error('[Worker] Conversion error in PyConverter:', error);
+            console.error('[Worker] PyConverterでの変換エラー:', error);
             throw error;
         }
     }
