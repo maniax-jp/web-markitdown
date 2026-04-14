@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web-MarkItDown | ブラウザ完結型ドキュメント変換</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Pyodide loading will be handled in main.js -->
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>Web-MarkItDown</h1>
+            <p>サーバーに送信せず、ブラウザ内ですべて完結してMarkdownに変換します。</p>
+        </header>
+
+        <main>
+            <div id="drop-zone" class="drop-zone">
+                <p>ファイルをここにドラッグ＆ドロップするか、クリックして選択してください</p>
+                <input type="file" id="file-input" multiple style="display: none;">
+            </div>
+
+            <div id="status-container" class="hidden">
+                <div class="loader"></div>
+                <p id="status-text">Pyodideをロード中...</p>
+            </div>
+
+            <div id="result-container" class="hidden">
+                <div class="toolbar">
+                    <button id="download-btn">Markdownを保存</button>
+                    <button id="clear-btn">クリア</button>
+                </div>
+                <textarea id="markdown-output" readonly></textarea>
+            </div>
+        </main>
+    </div>
+    <script src="main.js" type="module"></script>
+</body>
+</html>
