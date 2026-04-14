@@ -1,11 +1,27 @@
 # Dependencies
 node_modules/
+.venv/
+venv/
+env/
+ENV/
 
 # Build output
 dist/
 build/
+__pycache__/
+*.py[cod]
+*$py.class
 
 # Temporary files
 .tmp/
 *.log
 .DS_Store
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# IDEs
+.vscode/
+.idea/

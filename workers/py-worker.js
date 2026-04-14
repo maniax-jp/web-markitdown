@@ -1,9 +1,11 @@
 /**
  * Web-MarkItDown - py-worker.js
  * Pyodideの実行環境をメインスレッドから分離し、Web Workerで動作させる。
+ * ONNX Runtime Web を使用して、Magikaによるファイル形式判定をブラウザで動作させる。
  */
 
 importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js');
+importScripts('https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js');
 
 class PyodideEnv {
     constructor() {
@@ -18,26 +20,142 @@ class PyodideEnv {
         if (this.isInitialized) return;
 
         try {
-            // Worker環境では self.loadPyodide を使用
             this.pyodide = await self.loadPyodide({
                 indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.1/full/'
             });
 
-            // micropipをロードしてmarkitdownをインストール
             await this.pyodide.loadPackage('micropip');
             const micropip = this.pyodide.pyimport('micropip');
 
-            // markitdownをインストール
-            await micropip.install('markitdown');
+            // 1. ローカルソースコードを VFS にロード
+            console.log('[Worker] Loading local markitdown source...');
+            const response = await fetch('/markitdown_manifest.json');
+            const manifest = await response.json();
 
-            // MarkItDownインスタンスをグローバルに作成し、再利用できるようにする
+            const srcRoot = '/home/pyodide/markitdown_src';
+            for (const file of manifest) {
+                const filePath = `${srcRoot}/${file.path}`;
+                const pathParts = filePath.split('/');
+                let currentPath = '';
+                for (let i = 1; i < pathParts.length - 1; i++) {
+                    currentPath += `/${pathParts[i]}`;
+                    try { this.pyodide.FS.mkdir(currentPath); } catch(e) {}
+                }
+                this.pyodide.FS.writeFile(filePath, file.content);
+            }
+
+            // sys.path にソースルートを追加
+            await this.pyodide.runPythonAsync(`
+import sys
+sys.path.append('/home/pyodide/markitdown_src')
+            `);
+
+            // 2. 依存ライブラリのインストール (純粋Pythonのみ)
+            // Pyodide 公式パッケージを優先的にロード
+            const officialPackages = ['numpy', 'pillow', 'cryptography'];
+            for (const pkg of officialPackages) {
+                try {
+                    await this.pyodide.loadPackage(pkg);
+                } catch (e) {
+                    console.warn(`[Worker] Official package ${pkg} load failed:`, e);
+                }
+            }
+
+            const deps = [
+                'requests', 'beautifulsoup4', 'markdownify', 'defusedxml',
+                'certifi', 'charset-normalizer', 'click', 'flatbuffers',
+                'idna', 'mpmath', 'packaging', 'python-dotenv',
+                'six', 'soupsieve', 'sympy', 'typing-extensions', 'urllib3',
+                'pdfminer.six', 'pdfplumber'
+            ];
+            for (const dep of deps) {
+                try {
+                    await micropip.install(dep);
+                } catch (e) {
+                    console.warn(`[Worker] ${dep} install failed:`, e);
+                }
+            }
+
+            // 3. ONNX Runtime Web Bridge & Async Patch
+            await this.pyodide.runPythonAsync(`
+import sys
+from types import ModuleType
+import js
+
+# onnxruntime モック
+ort_mock = ModuleType('onnxruntime')
+sys.modules['onnxruntime'] = ort_mock
+
+class JSInferenceSession:
+    def __init__(self, model_path):
+        self.model_path = model_path
+        self.session = None
+
+    async def _ensure_session(self):
+        if self.session is None:
+            self.session = await js.ort.InferenceSession.create(self.model_path)
+
+    async def run(self, inputs):
+        await self._ensure_session()
+        return await self.session.run(inputs)
+
+ort_mock.InferenceSession = JSInferenceSession
+
+# magika モック
+magika_mock = ModuleType('magika')
+sys.modules['magika'] = magika_mock
+class MockMagika:
+    def __init__(self):
+        pass
+    def detect_file(self, path):
+        class PredictionOutput:
+            def __init__(self):
+                self.label = "unknown"
+                self.is_text = False
+                self.mime_type = "application/octet-stream"
+                self.extensions = []
+        class Prediction:
+            def __init__(self):
+                self.output = PredictionOutput()
+        class Result:
+            def __init__(self):
+                self.status = "ok"
+                self.prediction = Prediction()
+        return Result()
+
+    def identify_stream(self, stream):
+        class PredictionOutput:
+            def __init__(self):
+                self.label = "unknown"
+                self.is_text = False
+                self.mime_type = "application/octet-stream"
+                self.extensions = []
+        class Prediction:
+            def __init__(self):
+                self.output = PredictionOutput()
+        class Result:
+            def __init__(self):
+                self.status = "ok"
+                self.prediction = Prediction()
+        return Result()
+magika_mock.Magika = MockMagika
+
+# PDF依存関係チェックのバイパス
+import markitdown.converters._pdf_converter as pdf_conv
+pdf_conv._dependency_exc_info = None
+
+# MarkItDown の初期化
+import markitdown
+            `);
+
+            // MarkItDownインスタンスを作成
             this.pyodide.runPython(`
 from markitdown import MarkItDown
 global_md = MarkItDown()
             `);
 
             this.isInitialized = true;
-            console.log('[Worker] Pyodide環境の初期化およびmarkitdownのインストールが完了しました。');
+            console.log('[Worker] Pyodide環境の初期化 (ソースロード方式) が完了しました。');
         } catch (error) {
             console.error('[Worker] Pyodide環境の初期化に失敗しました:', error);
             throw error;
@@ -46,56 +164,40 @@ global_md = MarkItDown()
 }
 
 class FSHandler {
-    /**
-     * バッファデータ(Uint8Array)をPyodideの仮想ファイルシステムに書き込む。
-     * @param {string} fileName - ファイル名
-     * @param {Uint8Array} data - 書き込むデータ
-     * @param {any} pyodide - Pyodideインスタンス
-     * @returns {Promise<string>} 仮想FS上のファイルパス
-     */
     async writeFileFromBuffer(fileName, data, pyodide) {
-        if (!pyodide) {
-            throw new Error('仮想ファイルシステムへの書き込みにはPyodideインスタンスが必要です。');
-        }
+        if (!pyodide) throw new Error('Pyodideインスタンスが必要です。');
         const filePath = `/tmp/${fileName}`;
         try {
             pyodide.FS.writeFile(filePath, data);
             return filePath;
         } catch (error) {
-            console.error(`[Worker] VFSへのバッファ書き込みエラー ${fileName}:`, error);
-            throw new Error(`仮想システムへのファイル保存に失敗しました: ${error.message}`);
+            console.error(`[Worker] VFS書き込みエラー ${fileName}:`, error);
+            throw new Error(`ファイル保存に失敗しました: ${error.message}`);
         }
     }
 
-    /**
-     * 仮想ファイルシステムからファイルを削除する。
-     * @param {string} filePath - 削除するファイルのパス
-     * @param {any} pyodide - Pyodideインスタンス
-     */
     deleteFile(filePath, pyodide) {
         if (!pyodide || !filePath) return;
         try {
             pyodide.FS.unlink(filePath);
         } catch (error) {
-            console.warn(`[Worker] 警告: 仮想ファイル ${filePath} の削除に失敗しました:`, error);
+            console.warn(`[Worker] 警告: ファイル削除に失敗しました:`, error);
         }
     }
 }
 
 class PyConverter {
-    /**
-     * 仮想FS上のファイルをマークダウンに変換する。
-     * @param {any} pyodide - Pyodideインスタンス
-     * @param {string} filePath - 仮想FS上のファイルパス
-     * @returns {Promise<string>} 変換後のマークダウン
-     */
     async convert(pyodide, filePath) {
         try {
             pyodide.globals.set('filePath', filePath);
 
-            const pythonCode = `global_md.convert(filePath).markdown`;
+            // 同期的に convert を実行し、結果の markdown を取得
+            const pythonCode = `
+result = global_md.convert(filePath)
+result.markdown
+            `;
 
-            const markdown = pyodide.runPython(pythonCode);
+            const markdown = await pyodide.runPythonAsync(pythonCode);
             return markdown;
         } catch (error) {
             console.error('[Worker] PyConverterでの変換エラー:', error);
@@ -104,52 +206,29 @@ class PyConverter {
     }
 }
 
-// インスタンス化
 const pyEnv = new PyodideEnv();
 const fsHandler = new FSHandler();
 const converter = new PyConverter();
 
-/**
- * メインスレッドからのメッセージ処理
- */
 self.onmessage = async (e) => {
     const { type, payload } = e.data;
-
     try {
         switch (type) {
             case 'INIT':
                 await pyEnv.init();
                 self.postMessage({ type: 'INIT_SUCCESS' });
                 break;
-
             case 'CONVERT':
                 const { fileName, fileData } = payload;
-
-                // 1. ファイルを仮想FSに書き込み
                 const filePath = await fsHandler.writeFileFromBuffer(fileName, fileData, pyEnv.pyodide);
-
-                // 2. 変換実行
                 const markdown = await converter.convert(pyEnv.pyodide, filePath);
-
-                // 3. クリーンアップ
                 fsHandler.deleteFile(filePath, pyEnv.pyodide);
-
-                self.postMessage({
-                    type: 'CONVERT_SUCCESS',
-                    payload: { markdown }
-                });
+                self.postMessage({ type: 'CONVERT_SUCCESS', payload: { markdown } });
                 break;
-
             default:
-                self.postMessage({
-                    type: 'ERROR',
-                    payload: { message: `未知のコマンドです: ${type}` }
-                });
+                self.postMessage({ type: 'ERROR', payload: { message: `未知のコマンドです: ${type}` } });
         }
     } catch (error) {
-        self.postMessage({
-            type: 'ERROR',
-            payload: { message: error.message }
-        });
+        self.postMessage({ type: 'ERROR', payload: { message: error.message } });
     }
 };
