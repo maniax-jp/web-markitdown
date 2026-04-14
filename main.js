@@ -11,6 +11,7 @@ class App {
         this.worker = new Worker('./workers/py-worker.js');
         this.downloader = new Downloader();
         this.errorHandler = new ErrorHandler();
+        this.isWorkerInitialized = false;
 
         this.initUI();
     }
@@ -61,12 +62,14 @@ class App {
     /**
      * Workerにメッセージを送信し、レスポンスを待機する。
      */
-    async requestWorker(type, payload = {}) {
+    async requestWorker(type, payload = {}, transfer = []) {
         return new Promise((resolve, reject) => {
             const handleMessage = (e) => {
                 const { type: responseType, payload: responsePayload } = e.data;
 
-                if (responseType === 'INIT_SUCCESS' && type === 'INIT') {
+                if (responseType === 'STATUS_UPDATE') {
+                    this.showStatus(true, responsePayload.message);
+                } else if (responseType === 'INIT_SUCCESS' && type === 'INIT') {
                     this.worker.removeEventListener('message', handleMessage);
                     resolve(responsePayload);
                 } else if (responseType === 'CONVERT_SUCCESS' && type === 'CONVERT') {
@@ -79,7 +82,7 @@ class App {
             };
 
             this.worker.addEventListener('message', handleMessage);
-            this.worker.postMessage({ type, payload });
+            this.worker.postMessage({ type, payload }, transfer);
         });
     }
 
@@ -91,7 +94,10 @@ class App {
             this.showStatus(true, `ファイルを処理中: ${file.name}...`);
 
             // 1. Pyodide環境の準備 (Worker側で初期化)
-            await this.requestWorker('INIT');
+            if (!this.isWorkerInitialized) {
+                await this.requestWorker('INIT');
+                this.isWorkerInitialized = true;
+            }
 
             // 2. ファイルデータを読み込み
             const arrayBuffer = await file.arrayBuffer();
@@ -101,7 +107,7 @@ class App {
             const result = await this.requestWorker('CONVERT', {
                 fileName: file.name,
                 fileData: fileData
-            });
+            }, [fileData.buffer]);
 
             // 4. 結果表示
             this.displayResult(result.markdown);
