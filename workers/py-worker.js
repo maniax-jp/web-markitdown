@@ -30,6 +30,12 @@ class PyodideEnv {
             // markitdownをインストール
             await micropip.install('markitdown');
 
+            // MarkItDownインスタンスをグローバルに作成し、再利用できるようにする
+            this.pyodide.runPython(`
+from markitdown import MarkItDown
+global_md = MarkItDown()
+            `);
+
             this.isInitialized = true;
             console.log('[Worker] Pyodide環境の初期化およびmarkitdownのインストールが完了しました。');
         } catch (error) {
@@ -87,12 +93,7 @@ class PyConverter {
         try {
             pyodide.globals.set('filePath', filePath);
 
-            const pythonCode = `
-from markitdown import MarkItDown
-md = MarkItDown()
-result = md.convert(filePath)
-result.markdown
-            `;
+            const pythonCode = `global_md.convert(filePath).markdown`;
 
             const markdown = pyodide.runPython(pythonCode);
             return markdown;
