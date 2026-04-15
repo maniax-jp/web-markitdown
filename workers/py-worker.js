@@ -3,6 +3,7 @@
  * Pyodideの実行環境をメインスレッドから分離し、Web Workerで動作させる。
  * ONNX Runtime Web を使用して、Magikaによるファイル形式判定をブラウザで動作させる。
  */
+console.log('[Worker] Script loaded');
 
 importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js');
 importScripts('https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js');
@@ -23,6 +24,7 @@ class PyodideEnv {
             this.pyodide = await self.loadPyodide({
                 indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.1/full/'
             });
+            console.log('[Worker] Pyodide loaded');
 
             await this.pyodide.loadPackage('micropip');
             const micropip = this.pyodide.pyimport('micropip');
@@ -31,6 +33,7 @@ class PyodideEnv {
             console.log('[Worker] Loading local markitdown source...');
             const response = await fetch('../markitdown_manifest.json');
             const manifest = await response.json();
+            console.log(`[Worker] Manifest loaded, ${manifest.length} files to load`);
 
             const srcRoot = '/home/pyodide/markitdown_src';
             for (const file of manifest) {
@@ -66,15 +69,17 @@ sys.path.append('/home/pyodide/markitdown_src')
                 'certifi', 'charset-normalizer', 'click', 'flatbuffers',
                 'idna', 'mpmath', 'packaging', 'python-dotenv',
                 'six', 'soupsieve', 'sympy', 'typing-extensions', 'urllib3',
-                'pdfminer.six', 'pdfplumber'
+                'pdfminer.six'
             ];
             for (const dep of deps) {
                 try {
+                    console.log(`[Worker] Installing ${dep}...`);
                     await micropip.install(dep);
                 } catch (e) {
                     console.warn(`[Worker] ${dep} install failed:`, e);
                 }
             }
+            console.log('[Worker] All dependencies installation attempted');
 
             // 3. ONNX Runtime Web Bridge & Async Patch
             await this.pyodide.runPythonAsync(`
@@ -193,7 +198,9 @@ class PyConverter {
 
             // 同期的に convert を実行し、結果の markdown を取得
             const pythonCode = `
+print("[Python] Starting conversion...")
 result = global_md.convert(filePath)
+print("[Python] Conversion finished")
 result.markdown
             `;
 
@@ -212,6 +219,7 @@ const converter = new PyConverter();
 
 self.onmessage = async (e) => {
     const { type, payload } = e.data;
+    console.log(`[Worker] Received message: ${type}`);
     try {
         switch (type) {
             case 'INIT':
