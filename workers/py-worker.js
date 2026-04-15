@@ -29,7 +29,7 @@ class PyodideEnv {
 
             // 1. ローカルソースコードを VFS にロード
             console.log('[Worker] Loading local markitdown source...');
-            const response = await fetch('/markitdown_manifest.json');
+            const response = await fetch('../markitdown_manifest.json');
             const manifest = await response.json();
 
             const srcRoot = '/home/pyodide/markitdown_src';
