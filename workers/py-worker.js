@@ -69,7 +69,7 @@ sys.path.append('/home/pyodide/markitdown_src')
                 'certifi', 'charset-normalizer', 'click', 'flatbuffers',
                 'idna', 'mpmath', 'packaging', 'python-dotenv',
                 'six', 'soupsieve', 'sympy', 'typing-extensions', 'urllib3',
-                'pdfminer.six'
+                'pdfminer.six', 'python-pptx', 'mammoth', 'pandas', 'openpyxl'
             ];
             for (const dep of deps) {
                 try {
