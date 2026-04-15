@@ -12,8 +12,30 @@ class App {
         this.downloader = new Downloader();
         this.errorHandler = new ErrorHandler();
         this.isWorkerInitialized = false;
+        this.initPromise = null;
 
         this.initUI();
+        this.initializeWorker();
+    }
+
+    /**
+     * Workerの初期化をバックグラウンドで開始する。
+     */
+    async initializeWorker() {
+        if (this.initPromise) return this.initPromise;
+
+        this.initPromise = (async () => {
+            try {
+                await this.requestWorker('INIT');
+                this.isWorkerInitialized = true;
+                console.log('[App] Worker initialized in background');
+            } catch (error) {
+                console.error('[App] Background worker initialization failed:', error);
+                this.initPromise = null;
+                throw error;
+            }
+        })();
+        return this.initPromise;
     }
 
     initUI() {
@@ -95,8 +117,7 @@ class App {
 
             // 1. Pyodide環境の準備 (Worker側で初期化)
             if (!this.isWorkerInitialized) {
-                await this.requestWorker('INIT');
-                this.isWorkerInitialized = true;
+                await this.initializeWorker();
             }
 
             // 2. ファイルデータを読み込み
